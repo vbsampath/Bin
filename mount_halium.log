@@ -1,0 +1,3 @@
+qemu-nbd: Failed to blk_new_open '/home/vikram/halium.vdi': Failed to get "write" lock
+Is another process using the image [/home/vikram/halium.vdi]?
+mount: /home/vikram/Media/halium: special device /dev/nbd1p1 does not exist.

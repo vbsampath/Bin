@@ -1,0 +1,216 @@
+#!/bin/sh
+#
+#  Copyright (c) 2014 Canonical
+#
+#  Author: Oliver Grawert <ogra@canonical.com>
+#
+#  This program is free software; you can redistribute it and/or
+#  modify it under the terms of the GNU General Public License as
+#  published by the Free Software Foundation; either version 2 of the
+#  License, or (at your option) any later version.
+#
+#  This program is distributed in the hope that it will be useful,
+#  but WITHOUT ANY WARRANTY; without even the implied warranty of
+#  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+#  GNU General Public License for more details.
+#
+#  You should have received a copy of the GNU General Public License
+#  along with this program; if not, write to the Free Software
+#  Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA 02111-1307
+#  USA
+#
+
+set -e
+
+TARPATH=$1
+SYSIMG=$2
+
+check_prereq()
+{
+	if [ ! $(which make_ext4fs) ] || [ ! -x $(which simg2img) ] || \
+		[ ! -x $(which adb) ]; then
+		echo "please install the android-tools-fsutils and android-tools-adb packages" && exit 1
+	fi
+}
+
+do_shell()
+{
+	adb shell "$@"
+}
+
+convert_android_img()
+{
+	if file $SYSIMG | grep -v ": Linux rev 1.0 ext4" >/dev/null; then
+		simg2img $SYSIMG $WORKDIR/system.img.raw
+		mkdir $TMPMOUNT
+		mount -t ext4 -o loop $WORKDIR/system.img.raw $TMPMOUNT
+		make_ext4fs -l 160M $WORKDIR/system.img $TMPMOUNT
+		SYSIMAGE=$WORKDIR/system.img
+	else
+		SYSIMAGE=$SYSIMG
+	fi
+}
+
+check_mounts(){
+	MOUNTS=$(do_shell "cat /proc/mounts")
+	if ! echo $MOUNTS | grep -qs '/cache'; then
+		do_shell "mount /cache"
+	fi
+	if ! echo $MOUNTS | grep -qs '/data'; then
+		do_shell "mount /data"
+	fi
+}
+
+
+prepare_halium_system()
+{
+	do_shell "rm -f /data/rootfs.img"
+	do_shell "dd if=/dev/zero of=/data/rootfs.img seek=500K bs=4096 count=0"
+	do_shell "mkfs.ext2 -F /data/rootfs.img"
+	do_shell "mkdir -p /cache/system"
+	do_shell "mount -o loop /data/rootfs.img /cache/system/"
+}
+
+cleanup()
+{
+	echo
+	echo "cleaning up"
+	mount | grep -q $TMPMOUNT 2>/dev/null && umount $TMPMOUNT
+	cleanup_device
+	rm -rf $WORKDIR
+	echo
+}
+
+cleanup_device()
+{
+	[ -e $WORKDIR/device-clean ] && return
+	do_shell "umount /cache/system/ && rm -rf /cache/system"
+	do_shell "rm -f /recovery/$TARBALL"
+	[ -e $WORKDIR ] && touch $WORKDIR/device-clean 2>/dev/null || true
+}
+
+trap cleanup 0 1 2 3 9 15
+
+usage()
+{
+	echo "usage: $(basename $0) <path to rootfs tarball> <path to android system.img> [options]
+	options:
+	-h|--help		this message
+	-c|--custom		path to customization tarball (needs to be tar.xz)
+	-k|--keep-userdata	do not wipe user data on device
+	-w|--wipe-file		absolute path of a file inside the image to wipe (empty)"
+	exit 1
+}
+
+SUDOARGS="$@"
+
+while [ $# -gt 0 ]; do
+	case "$1" in
+		-h|--help)
+			usage
+			;;
+		-c|--custom)
+			[ -n "$2" ] && CUST_TARPATH=$2 shift || usage
+			;;
+		-k|--keep-userdata)
+			KEEP=1
+			;;
+		-w|--wipe-file)
+			[ -n "$2" ] && WIPE_PATH=$2 shift || usage
+			;;
+	esac
+	shift
+done
+
+if [ -z "$TARPATH" ]; then
+    echo "need valid rootfs tarball path"
+    usage
+fi
+
+TARBALL=$(basename $TARPATH)
+
+if [ -z "$TARBALL" ]; then
+    echo "need valid rootfs tarball path"
+    usage
+fi
+
+TARTYPE=$(file --mime-type $TARPATH|sed 's/^.* //')
+case ${TARTYPE#application\/} in
+    gzip|x-gzip)
+	;;
+    *)
+	echo "Need valid rootfs tarball gzip type"
+	usage
+	;;
+esac
+
+if [ -z "$SYSIMG" ] || \
+	[ "$(file --mime-type $SYSIMG|sed 's/^.* //')" != "application/octet-stream" ]; then
+	echo "need valid system.img path and type application/octet-stream"
+	usage
+fi
+
+if [ ! -z "$CUST_TARPATH" ] && \
+	[  "$(file --mime-type $CUST_TARPATH|sed 's/^.* //')" != "application/x-xz" ]; then
+	echo "Custom tarball needs to be valid path and type .tar.xz"
+	usage
+fi
+
+[ $(id -u) -ne 0 ] && exec sudo $0 $SUDOARGS
+
+check_prereq
+
+if ! adb devices | grep -q recovery; then
+	echo "please make sure the device is attched via USB in recovery mode"
+	exit 1
+fi
+
+check_mounts
+
+WORKDIR=$(mktemp -d /tmp/halium-install.XXXXX)
+TMPMOUNT="$WORKDIR/tmpmount"
+
+echo "transfering rootfs tarball ... "
+#do_shell "[ ! -d /recovery ] && mkdir recovery"
+do_shell "if [ ! -d /recovery ]; then mkdir recovery; fi"
+
+adb push $TARPATH /recovery/
+echo "[done]"
+
+if [ ! -z "$CUST_TARPATH" ]; then
+	CUST_TARBALL=$(basename $CUST_TARPATH)
+	echo  -n "transferring custom tarball"
+	adb push $CUST_TARPATH /recovery/
+	echo "[done]"
+fi
+
+echo -n "preparing system-image on device ... "
+prepare_halium_system
+echo "[done]"
+
+echo -n "unpacking rootfs tarball to system-image ... "
+#do_shell "cd /cache/system && zcat /recovery/$TARBALL | tar xf -"
+
+do_shell "cd /cache/system && tar xf /recovery/$TARBALL --exclude=usr"
+do_shell "cd /cache/system && tar xf /recovery/$TARBALL usr --exclude=usr/share"
+do_shell "cd /cache/system && tar xf /recovery/$TARBALL usr/share --exclude=usr/share/click --exclude=usr/share/icons --exclude=usr/share/locale --exclude=usr/share/locale-langpack --exclude=usr/share/zoneinfo"
+do_shell "cd /cache/system && tar xf /recovery/$TARBALL usr/share/click usr/share/locale usr/share/locale-langpack usr/share/zoneinfo"
+do_shell "cd /cache/system && tar xf /recovery/$TARBALL usr/share/icons"
+
+echo -n "unpacking done"
+do_shell "[ -e /cache/system/SWAP.swap ] && mv /cache/system/SWAP.swap /data/SWAP.img"
+echo -n "moved swap file"
+echo "[done]"
+
+echo -n "adding android system image to installation ... "
+convert_android_img
+ANDROID_DIR="/data"
+adb push $SYSIMAGE $ANDROID_DIR/system.img
+echo "[done]"
+
+echo -n "cleaning up on device ... "
+cleanup_device
+echo "[done]"
+
+echo "All done! Now you can use 'adb shell' to get a shell to the recovery, or"
+echo "simply reboot your device to start Halium."

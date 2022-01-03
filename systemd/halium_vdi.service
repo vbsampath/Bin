@@ -1,0 +1,12 @@
+[Unit]
+Description=Halium Virtual Disk Setup
+After=syslog.target network.target remote-fs.target nss-lookup.target network-online.target local-fs.target modprobe_nbd.service
+
+[Service]
+Type=idle
+User=root
+ExecStart= /usr/bin/qemu-nbd -c /dev/nbd1 /home/vikram/halium.vdi
+TimeoutSec=20
+
+[Install]
+WantedBy=multi-user.target

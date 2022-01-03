@@ -1,0 +1,11 @@
+[Unit]
+Description="Check if /dev/nbd1 file exists"
+After=syslog.target network.target remote-fs.target nss-lookup.target network-online.target local-fs.target modprobe_nbd.service
+ConditionPathExists=/dev/nbd1
+
+[Path]
+PathExists=/dev/nbd1
+Unit=halium_vdi.service
+
+[Install]
+WantedBy=paths.target

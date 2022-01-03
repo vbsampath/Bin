@@ -1,0 +1,13 @@
+[Unit]
+Description=Mount Halium Virtual Disk Service
+After=syslog.target network.target remote-fs.target nss-lookup.target network-online.target local-fs.target halium_vdi.service
+Requires=halium_vdi.service
+
+[Mount]
+What=/dev/nbd1p1
+Where=/home/vikram/Media/halium
+Type=ext4
+Options=defaults,noatime
+
+[Install]
+WantedBy=multi-user.target

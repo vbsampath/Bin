@@ -1,0 +1,11 @@
+[Unit]
+Description=CPU Underclocking Service
+After=network.target
+
+[Service]
+Type=simple
+User=root
+ExecStart= /usr/bin/bash /home/vikram/Bin/cpu_underfreq.sh >> /home/vikram/Bin/cpu_underfreq.log
+
+[Install]
+WantedBy=multi-user.target
